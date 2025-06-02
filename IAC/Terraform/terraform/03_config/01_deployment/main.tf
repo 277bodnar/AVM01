@@ -11,6 +11,12 @@ data "terraform_remote_state" "l02_d01" {
 # ------------------------------------------------------------------------------------------------------
 # Deploy resource group
 # ------------------------------------------------------------------------------------------------------
+
+module "avm-res-app-containerapp_example_default" {
+  source  = "Azure/avm-res-app-containerapp/azurerm//examples/default"
+  version = "0.6.0"
+}
+
 resource "random_id" "rg_name" {
   byte_length = 8
 }
