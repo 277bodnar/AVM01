@@ -24,7 +24,7 @@ resource "random_id" "container_name" {
 }
 
 resource "azurerm_resource_group" "test" {
-  location = var.location
+  location = "WestEurope"
   name     = "example-container-app-${random_id.rg_name.hex}"
 }
 
