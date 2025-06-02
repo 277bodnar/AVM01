@@ -11,59 +11,133 @@ data "terraform_remote_state" "l02_d01" {
 # ------------------------------------------------------------------------------------------------------
 # Deploy resource group
 # ------------------------------------------------------------------------------------------------------
-resource "azurecaf_name" "rg_name" {
-  name          = "config"
-  resource_type = "azurerm_resource_group"
-  prefixes      = [var.env]
-  random_length = 3
-  clean_input   = true
+resource "random_id" "rg_name" {
+  byte_length = 8
 }
 
-resource "azurerm_resource_group" "rg" {
-  name     = azurecaf_name.rg_name.result
+resource "random_id" "env_name" {
+  byte_length = 8
+}
+
+resource "random_id" "container_name" {
+  byte_length = 4
+}
+
+resource "azurerm_resource_group" "test" {
   location = var.location
-  tags = {
-    GeneratedBy = "symphony"
+  name     = "example-container-app-${random_id.rg_name.hex}"
+}
+
+locals {
+  counting_app_name  = "counting-${random_id.container_name.hex}"
+  dashboard_app_name = "dashboard-${random_id.container_name.hex}"
+}
+
+resource "azurerm_container_app_environment" "example" {
+  location            = azurerm_resource_group.test.location
+  name                = "my-environment"
+  resource_group_name = azurerm_resource_group.test.name
+}
+
+module "counting" {
+  source = "../.."
+
+  container_app_environment_resource_id = azurerm_container_app_environment.example.id
+  name                                  = local.counting_app_name
+  resource_group_name                   = azurerm_resource_group.test.name
+  revision_mode                         = "Single"
+  template = {
+    containers = [
+      {
+        name   = "countingservicetest1"
+        memory = "0.5Gi"
+        cpu    = 0.25
+        image  = "docker.io/hashicorp/counting-service:0.0.2"
+        env = [
+          {
+            name  = "PORT"
+            value = "9001"
+          }
+        ]
+      },
+    ]
+  }
+  auth_configs = {
+    fake_facebook = {
+      name = "current"
+      global_validation = {
+        unauthenticated_client_action = "AllowAnonymous"
+      }
+      identity_providers = {
+        facebook = {
+          registration = {
+            app_id                  = "123"
+            app_secret_setting_name = "facebook-secret"
+          }
+        }
+      }
+      platform = {
+        enabled = true
+      }
+    }
+  }
+  ingress = {
+    allow_insecure_connections = true
+    client_certificate_mode    = "ignore"
+    external_enabled           = true
+    target_port                = 9001
+    traffic_weight = [{
+      latest_revision = true
+      percentage      = 100
+    }]
+  }
+  secrets = {
+    facebook_secret = {
+      name  = "facebook-secret"
+      value = "very_secret"
+    }
   }
 }
 
-data "azurerm_client_config" "client_config" {
-}
+module "dashboard" {
+  source = "../.."
 
-resource "azurerm_role_assignment" "data_owner_role_assignment" {
-  scope                = azurerm_resource_group.rg.id
-  role_definition_name = "App Configuration Data Owner"
-  principal_id         = data.azurerm_client_config.client_config.object_id
-}
+  container_app_environment_resource_id = azurerm_container_app_environment.example.id
+  name                                  = local.dashboard_app_name
+  resource_group_name                   = azurerm_resource_group.test.name
+  revision_mode                         = "Single"
+  template = {
+    containers = [
+      {
+        name   = "testdashboard"
+        memory = "1Gi"
+        cpu    = 0.5
+        image  = "docker.io/hashicorp/dashboard-service:0.0.4"
+        env = [
+          {
+            name  = "PORT"
+            value = "8080"
+          },
+          {
+            name  = "COUNTING_SERVICE_URL"
+            value = "http://${local.counting_app_name}"
+          }
+        ]
+      },
+    ]
+  }
+  ingress = {
+    allow_insecure_connections = false
+    client_certificate_mode    = "ignore"
+    target_port                = 8080
+    external_enabled           = true
 
-# ------------------------------------------------------------------------------------------------------
-# Deploy app configuration
-# ------------------------------------------------------------------------------------------------------
-resource "azurecaf_name" "app_configuration" {
-  name          = "appconfig"
-  resource_type = "azurerm_app_configuration"
-  prefixes      = [var.env]
-  random_length = 3
-  clean_input   = true
-}
-resource "azurerm_app_configuration" "appconfig" {
-  name                = azurecaf_name.app_configuration.result
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-  sku                 = "standard"
-
-  depends_on = [
-    azurerm_role_assignment.data_owner_role_assignment
-  ]
-}
-
-# ------------------------------------------------------------------------------------------------------
-# Deploy app config key
-# ------------------------------------------------------------------------------------------------------
-
-resource "azurerm_app_configuration_key" "app_config_key" {
-  configuration_store_id = azurerm_app_configuration.appconfig.id
-  key                    = "storageAccountName"
-  value                  = data.terraform_remote_state.l02_d01.outputs.storage_account_name
-  content_type           = "text/plain"
+    traffic_weight = [{
+      latest_revision = true
+      percentage      = 100
+    }]
+  }
+  managed_identities = {
+    system_assigned = true
+  }
 }
